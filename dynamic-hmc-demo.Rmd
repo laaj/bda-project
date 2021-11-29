@@ -1,0 +1,14 @@
+---
+title: "BDA - Project"
+author: "Joonas Laaksonen"
+output:
+  html_document:
+    theme: readable
+    code_download: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dynamic Hamiltonian Monte Carlo
