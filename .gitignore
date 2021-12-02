@@ -1,0 +1,4 @@
+*.log
+dynamic-hmc-demo_cache
+dynamic-hmc-demo_files
+.Rhistory
