@@ -1,10 +1,12 @@
 ---
 title: "Bayesian Data Analysis - Project"
-author: "Joonas Laaksonen"
+author: "Anonymous"
 output:
   html_document:
     theme: readable
     code_download: true
+    toc: yes
+    toc_depth: 2
 bibliography: references.bib
 ---
 
@@ -26,7 +28,7 @@ $$
 (\tilde{\theta} - \theta)^T \tilde{\phi} < 0
 $$
 
-That is, we should stop the simulation when the angle between the current momentum $\tilde{\phi}$ and the vector from the starting point $\theta$ to the current point $\tilde{\theta}$ is less than 90 degrees. This criterion corresponds to stopping when the trajectory starts to rotate towards the starting point and the distance between $\theta$ and $\tilde{\theta}$ starts to decrease. Unfortunately, the above scheme does not guarantee reversibility of the Markov chain, and thus it is not guaranteed to converge to the desired target distribution. The reversibility can be remediated by making the simulation process random by allowing steps both forward and backward in time. This is incorporated in the NUTS algorithm [@hoffman] which we will present next.
+That is, we should stop the simulation when the angle between the current momentum $\tilde{\phi}$ and the vector from the starting point $\theta$ to the current point $\tilde{\theta}$ is less than 90 degrees. This criterion corresponds to stopping when the trajectory starts to rotate towards the starting point and the distance between $\theta$ and $\tilde{\theta}$ starts to decrease. Unfortunately, the above scheme does not guarantee reversibility of the Markov chain, and thus it is not guaranteed to converge to the desired target distribution. The reversibility can be remediated by making the simulation process random by allowing steps both forward and backward in time. This is incorporated in the NUTS algorithm [@hoffman] which we will present next. For a great exposition of HMC and its dynamic implementations without fixating too much on the details, see also [@betancourt].
 
 Assume that $p(\theta | y)$ is the target distribution and $\theta^{t}$ is the current draw. Let $\epsilon > 0$ be the step size for the leapfrog steps. The NUTS algorithm for drawing $\theta^{t+1}$ consists of the following steps.
 
@@ -38,7 +40,7 @@ Assume that $p(\theta | y)$ is the target distribution and $\theta^{t}$ is the c
 
     -   Sample $v_j \sim \text{Uniform}(\{ -1, 1 \})$ and perform $2^j$ leapfrog steps with the step size $v_j \epsilon$, always appending to the trajectory from the previous iteration.
 
-    -   The newly generated $2^j$ points are equivalent to the leaf nodes of a perfect, ordered binary tree with depth $j$, see Figure 1 below. Now consider each of the $2^j-1$ subtrees that have depth greater than 0, and for a given subtree denote the points associated with the leftmost and rightmost leaves by $(\theta^-, \phi^-)$ and $(\theta^+, \phi^+)$, respectively. If for some subtree it holds that
+    -   The newly generated $2^j$ points are equivalent to the leaf nodes of a perfect, ordered binary tree with depth $j$, see Figure 1 below. Now consider each of the $2^j-1$ subtrees that have depth greater than $0$, and for a given subtree denote the points associated with the leftmost and rightmost leaves by $(\theta^-, \phi^-)$ and $(\theta^+, \phi^+)$, respectively. If for some subtree it holds that
 
         $$
         (\theta^+ - \theta^-)^T \phi^- < 0
@@ -79,7 +81,7 @@ Assume that $p(\theta | y)$ is the target distribution and $\theta^{t}$ is the c
 \end{tikzpicture}
 ```
 
-In summary, after each iteration the number of leapfrog steps is doubled, and the simulation is stopped whenever any subtrajectory equivalent to a binary subtree satisfies one of the above stopping criterions. The slice variable $u$ is chosen so that $\theta^{t+1}$ can be drawn uniformly from $C$. Note that if we were able to simulate the Hamiltonian trajectory exactly, $H(\theta, \phi)$ would remain constant over the whole trajectory, and $e^{-H(\theta, \phi)} \geq 0$ would hold for all points on the trajectory. Thus, the condition $e^{-H(\theta, \phi)} \geq u$ can be interpreted as discarding all points for which the simulation error is too large. The stopping condition $H(\theta, \phi) + \log u > \Delta_{\text{max}}$ in step 3 is also related to terminating the simulation if the simulation error becomes too large. Note that the number of leapfrog steps increases exponentially, but as long as $\epsilon$ is small enough and the target distribution $p(\theta | y)$ is sufficiently well-behaved, the simulation error shouldn't increase in the number of leapfrog steps, which makes the above dynamic scheme attractive. As usual with HMC, the leapfrog steps require the gradient of the log-density, i.e. $\frac{d \log p(\theta | y)}{d\theta}$.
+In summary, after each iteration the number of leapfrog steps is doubled, and the simulation is stopped whenever any subtrajectory equivalent to a binary subtree satisfies one of the above stopping criterions. The slice variable $u$ is chosen so that $\theta^{t+1}$ can be drawn uniformly from $C$. Note that if we were able to simulate the Hamiltonian trajectory exactly, $H(\theta, \phi)$ would remain constant over the whole trajectory, and $e^{-H(\theta, \phi)} \geq u$ would hold for all points on the trajectory. Thus, the condition $e^{-H(\theta, \phi)} \geq u$ can be interpreted as discarding all points for which the simulation error is too large. The stopping condition $H(\theta, \phi) + \log u > \Delta_{\text{max}}$ in step 3 is also related to terminating the simulation if the simulation error becomes too large. Note that the number of leapfrog steps increases exponentially, but as long as $\epsilon$ is small enough and the target distribution $p(\theta | y)$ is sufficiently well-behaved, the simulation error shouldn't increase in the number of leapfrog steps, which makes the above dynamic scheme attractive. As usual with HMC, the leapfrog steps require the gradient of the log-density, i.e. $\frac{d \log p(\theta | y)}{d\theta}$.
 
 ## Implementation and visualization of NUTS
 
@@ -87,8 +89,10 @@ In summary, after each iteration the number of leapfrog steps is doubled, and th
 library(latex2exp)
 library(ggplot2)
 theme_set(theme_minimal())
+library(tidyr)
 library(MASS)
 library(gganimate)
+library(rstan)
 ```
 
 Next we will implement the NUTS algorithm and visualize how the trajectories look like. The following subroutines will be useful in the implementation.
@@ -112,8 +116,7 @@ The step 3 of the NUTS algorithm above is the trickiest to implement. In practic
 
 ```{r}
 # Perform the leapfrog steps and construct the subtrees recursively.
-build_tree <- function(theta, phi, u, v, j, epsilon, 
-                       log_p, grad_log_p, M_inv, trajectory) {
+build_tree <- function(theta, phi, u, v, j, epsilon, log_p, grad_log_p, M_inv, trajectory) {
   if (j == 0) {
     # Base case. Take just one leapfrog step.
     step <- leapfrog(theta, phi, v*epsilon, grad_log_p, M_inv)
@@ -185,8 +188,7 @@ We are now ready to implement the sampling function.
 #   - log_p         Log target distribution function.
 #   - grad_log_p    Gradient of the log target distribution function.
 #   - n_iter        Number of draws.
-#   - M             Symmetric positive definite mass matrix. 
-#                   Default: identity matrix.
+#   - M             Symmetric positive definite mass matrix. Default: identity matrix.
 #   - epsilon       Step size for the leapfrog steps. Default: 0.1
 #   - store_paths   Whether to store and return the individual trajectories
 #                   for visualization purposes. Default: TRUE
@@ -194,8 +196,7 @@ We are now ready to implement the sampling function.
 # If store_paths=TRUE, returns a list consisting of the n_iter draws and their
 # corresponding trajectories.
 # If store_paths=FALSE, returns just the draws.
-NUTS <- function(theta, log_p, grad_log_p, n_iter, 
-                 M=NULL, epsilon=0.1, store_paths=TRUE) {
+NUTS <- function(theta, log_p, grad_log_p, n_iter, M=NULL, epsilon=0.1, store_paths=TRUE) {
   if (is.null(M)) {
     M <- diag(length(theta))
   }
@@ -304,15 +305,15 @@ grad_log_p <- function(theta) {
 }
 ```
 
-Let $\theta^0 = (0, 0)$ be the starting point.
+Let $\theta^0 = (-2.5, 2.5)$ be the starting point. Simulate 2000 draws.
 
 ```{r}
 # Draw samples from the target distribution to visualize its 90%
 # HPD region with ggplot's stat_ellipse function.
 target_draws <- data.frame(mvrnorm(100000, c(0, 0), Sigma))
 
-theta_0 <- c(0, 0)
-n_iter <- 1000
+theta_0 <- c(-2.5, 2.5)
+n_iter <- 2000
 nuts_chain <- NUTS(theta_0, log_p, grad_log_p, n_iter)
 ```
 
@@ -320,7 +321,7 @@ The following example shows how to plot a single trajectory
 
 ```{r, fig.align="center"}
 # Try to find a trajectory with at least 32 points.
-t <- nuts_chain$trajectories[[5]]
+t <- nuts_chain$trajectories[[100]]
 for (i in 1:length(nuts_chain$trajectories)) {
   if (length(nuts_chain$trajectories[[i]]$colors) >= 32) {
     t <- nuts_chain$trajectories[[i]]
@@ -337,7 +338,7 @@ ggplot() +
   geom_segment(data = df, aes(x = theta1, xend = theta1_end, color = "gray",
                               y = theta2, yend = theta2_end), alpha = 0.5) +
   geom_point(data = df, aes(theta1, theta2, color = color), size = 2) + 
-  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) + 
+  coord_cartesian(xlim = c(-4, 4), ylim = c(-4, 4)) + 
   labs(x = TeX("$\\theta_1$"), y = TeX("$\\theta_2$")) +
   scale_color_manual(values = c("black" = "black", 
                                 "red" = "red", 
@@ -351,13 +352,13 @@ ggplot() +
                                 "HPD" = "90% HPD")) +
   guides(color = guide_legend(override.aes = list(shape = c(16, 16, 16, 16, NA),
                                                   linetype = c(0,0,0,0,1)))) +
-  theme(legend.title = element_blank())
+  theme(legend.position = "bottom", legend.title = element_blank())
 ```
 
-The following example displays how to animate the trajectories. Let's consider the first 25 draws.
+The following example displays how to animate the trajectories. Let's consider the first 50 draws.
 
 ```{r, fig.align="center", message=FALSE}
-nframes <- 25 # Set this to the number of iterations you wish to visualize.
+nframes <- 50 # Set this to the number of iterations you wish to visualize.
 df_trajectories <- data.frame()
 df_draws <- data.frame()
 for (i in 1:nframes) {
@@ -385,7 +386,7 @@ p <- ggplot() +
                                            y = theta2, yend = theta2_end,
                                            color = "gray"), alpha = 0.5) +
   geom_point(data = df_trajectories, aes(theta1, theta2, color = color), size = 2) +
-  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) +
+  coord_cartesian(xlim = c(-4, 4), ylim = c(-4, 4)) +
   labs(x = TeX("$\\theta_1$"), y = TeX("$\\theta_2$")) +
   scale_color_manual(values = c("black" = "black", 
                                 "red" = "red", 
@@ -399,8 +400,134 @@ p <- ggplot() +
                                 "HPD" = "90% HPD")) +
   guides(color = guide_legend(override.aes = list(shape = c(16, 16, 16, 16, NA),
                                                   linetype = c(0,0,0,0,1)))) +
-  theme(legend.title = element_blank()) 
+  theme(legend.position = "bottom", legend.title = element_blank()) 
   
-# Make sure that nframes is equal to the number of iterations that we wish to visualize.
-animate(p + transition_time(iter), nframes = nframes, fps = 0.5)
+# Make sure that nframes is equal to the number of iterations that you wish to visualize.
+animate(p + transition_time(iter), nframes = nframes, fps = 1)
 ```
+
+Plot all the draws after removing a warmup of 50 draws.
+
+```{r, fig.align="center"}
+warmup <- 50
+df <- data.frame(theta1 = nuts_chain$draws[(warmup+1):nrow(nuts_chain$draws), 1],
+                 theta2 = nuts_chain$draws[(warmup+1):nrow(nuts_chain$draws), 2])
+ggplot() +
+  geom_point(data = df, aes(theta1, theta2, color = "1"), alpha = 0.3) +
+  stat_ellipse(data = target_draws, aes(x = X1, y = X2, color = "2"), level = 0.9) +
+  coord_cartesian(xlim = c(-4, 4), ylim = c(-4, 4)) +
+  labs(x = TeX("$\\theta_1$"), y = TeX("$\\theta_2$")) + 
+  scale_color_manual(values = c("steelblue", "blue"), 
+                     labels = c("Draws", "90% HPD")) +
+  guides(color = guide_legend(override.aes = list(
+    shape = c(16, NA), linetype = c(0, 1), alpha = c(1, 1)))) +
+  theme(legend.position = "bottom", legend.title = element_blank())
+```
+
+## Convergence diagnostics
+
+Pure random-walk MCMC algorithms, such as Gibbs and Metropolis, tend to struggle in the presence of high correlations between the parameters. Let us demonstrate how NUTS is able to alleviate this. Consider again a normal target distribution but with the covariance matrix
+
+$$
+\Sigma =
+\begin{bmatrix}
+1 & 0.99 \\
+0.99 & 1
+\end{bmatrix}
+$$
+
+```{r}
+Sigma <- matrix(c(1, 0.99, 0.99, 1), nrow=2)
+Sigma_inv <- solve(Sigma)
+
+log_p <- function(theta) {
+  -0.5 * sum(theta * (Sigma_inv %*% theta))
+}
+
+grad_log_p <- function(theta) {
+  -Sigma_inv %*% theta
+}
+```
+
+Simulate a total of 4 chains, each consisting of 2000 draws. The starting points are $\{ (-2.5, 2.5), (2.5, 2.5), (2.5, -2.5), (-2.5, -2.5) \}$.
+
+```{r}
+# For HPD visualization.
+target_draws <- data.frame(mvrnorm(100000, c(0, 0), Sigma))
+
+n_iter <- 2000
+nuts_chain1 <- NUTS(c(-2.5,  2.5), log_p, grad_log_p, n_iter, store_paths=FALSE)
+nuts_chain2 <- NUTS(c( 2.5,  2.5), log_p, grad_log_p, n_iter, store_paths=FALSE)
+nuts_chain3 <- NUTS(c( 2.5, -2.5), log_p, grad_log_p, n_iter, store_paths=FALSE)
+nuts_chain4 <- NUTS(c(-2.5, -2.5), log_p, grad_log_p, n_iter, store_paths=FALSE)
+```
+
+Plot the draws of the first chain with a warmup of 50 draws.
+
+```{r, fig.align="center"}
+warmup <- 50
+df <- data.frame(theta1 = nuts_chain1[(warmup+1):nrow(nuts_chain1), 1],
+                 theta2 = nuts_chain1[(warmup+1):nrow(nuts_chain1), 2])
+ggplot() +
+  geom_point(data = df, aes(theta1, theta2, color = "1"), alpha = 0.3) +
+  stat_ellipse(data = target_draws, aes(x = X1, y = X2, color = "2"), level = 0.9) +
+  coord_cartesian(xlim = c(-4, 4), ylim = c(-4, 4)) +
+  labs(x = TeX("$\\theta_1$"), y = TeX("$\\theta_2$")) + 
+  scale_color_manual(values = c("steelblue", "blue"), 
+                     labels = c("Draws", "90% HPD")) +
+  guides(color = guide_legend(override.aes = list(
+    shape = c(16, NA), linetype = c(0, 1), alpha = c(1, 1)))) +
+  theme(legend.position = "bottom", legend.title = element_blank())
+```
+
+We see that NUTS is able to explore the relevant probability mass.
+
+Let's then look at some of the MCMC-specific convergence metrics by using the $\texttt{monitor}$ function from $\texttt{rstan}$.
+
+```{r}
+draws <- array(data = c(nuts_chain1, nuts_chain2, nuts_chain3, nuts_chain4), 
+               dim = c(n_iter+1, 2, 4),
+               dimnames = list(NULL, c("theta1", "theta2"), NULL))
+draws <- aperm(draws, c(1, 3, 2))
+monitor(draws)
+```
+
+Based on the $\widehat{R}$-values, it seems that the chains have converged.
+
+Plot a line plot of the first chain using a warmup of 50 draws.
+
+```{r, fig.align="center"}
+warmup <- 50
+df_chain <- data.frame(iter   = 1:(nrow(nuts_chain1)-warmup),
+                       theta1 = nuts_chain1[-(1:warmup), 1],
+                       theta2 = nuts_chain1[-(1:warmup), 2]) %>% 
+            gather(grp, value, -iter)
+
+ggplot() +
+  geom_line(data = df_chain, aes(iter, value, color = grp)) +
+  labs(title = "Trends") +
+  scale_color_discrete(labels = c("theta1", "theta2")) +
+  theme(legend.position = 'bottom', legend.title = element_blank())
+```
+
+Finally, visualize the autocorrelation function of the first chain.
+
+```{r, fig.align="center"}
+warmup <- 50
+nlags <- 50
+df_chain <- data.frame(theta1 = nuts_chain1[-(1:warmup), 1],
+                       theta2 = nuts_chain2[-(1:warmup), 2])
+df_acf <- sapply(df_chain, function(x) acf(x, lag.max = nlags, plot = F)$acf) %>%
+  data.frame(iter = 0:(nlags)) %>% gather(grp, value, -iter)
+
+ggplot() +
+  geom_line(data = df_acf, aes(iter, value, color = grp)) +
+  geom_hline(aes(yintercept = 0)) +
+  labs(title = "Autocorrelation function", x = "Iteration") +
+  scale_color_discrete(labels = c('theta1', 'theta2')) +
+  theme(legend.position = 'bottom', legend.title = element_blank())
+```
+
+The draws don't seem to be independent. As we saw in the visualization of NUTS, picking the next draw uniformly at random may take us very close to the starting point of the trajectory, which can partly explain the correlation between the draws. A better drawing scheme would be to add a larger weight to points far away from the starting point.
+
+## References
